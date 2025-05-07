@@ -5,7 +5,7 @@ import json
 from flask import Flask, request, jsonify
 from PIL import Image
 import vertexai
-from vertexai.preview.vision_models import ImageGenerationModel
+from vertexai.preview.vision_models import Image, ImageGenerationModel
 
 # Flaskアプリケーションの初期化
 app = Flask(__name__)
@@ -68,7 +68,7 @@ def imagen_generate(prompt, negative_prompt="", seed=None, aspect_ratio="3:4"):
             language="en",
             add_watermark=False,
             seed=seed,
-            safety_filter_level="block_some",
+            safety_filter_level="block_medium_and_above",
             person_generation="allow_adult"
         )
         
