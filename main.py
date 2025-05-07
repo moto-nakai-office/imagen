@@ -57,14 +57,14 @@ def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
 def imagen_generate(prompt, negative_prompt="", seed=None, aspect_ratio="3:4"):
     try:
         # Vertex AIのImagen 3.0モデルを初期化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
         
         # 画像生成リクエスト
         generate_response = model.generate_images(
             prompt=prompt,
             number_of_images=1,
             negative_prompt=negative_prompt,
-            aspect_ratio=aspect_ratio,
+            # aspect_ratio=aspect_ratio,
             language="en",
             add_watermark=False,
             seed=seed,
