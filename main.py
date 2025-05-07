@@ -11,8 +11,8 @@ from vertexai.preview.vision_models import ImageGenerationModel
 app = Flask(__name__)
 
 # Vertex AI初期化
-PROJECT_ID = os.environ.get("PROJECT_ID", "your-project-id")
-LOCATION = os.environ.get("LOCATION", "us-central1")
+PROJECT_ID = os.getenv("PROJECT_ID")
+LOCATION = os.getenv("REGION", "us-central1")
 vertexai.init(project=PROJECT_ID, location=LOCATION)
 
 def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
@@ -63,13 +63,13 @@ def imagen_generate(prompt, negative_prompt="", seed=None, aspect_ratio="3:4"):
         generate_response = model.generate_images(
             prompt=prompt,
             number_of_images=1,
-            # negative_prompt=negative_prompt,
-            # aspect_ratio=aspect_ratio,
-            # language="en",
-            # add_watermark=False,
-            # seed=seed,
-            # safety_filter_level="block_some",
-            # person_generation="allow_adult",
+            negative_prompt=negative_prompt,
+            aspect_ratio=aspect_ratio,
+            language="en",
+            add_watermark=False,
+            seed=seed,
+            safety_filter_level="block_some",
+            person_generation="allow_adult"
         )
         
         image_list = []
