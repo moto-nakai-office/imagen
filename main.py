@@ -65,9 +65,9 @@ def imagen_generate(prompt, negative_prompt="", seed=None, aspect_ratio="3:4"):
             number_of_images=1,
             negative_prompt=negative_prompt,
             # aspect_ratio=aspect_ratio,
-            language="en",
-            add_watermark=False,
-            seed=seed,
+            # language="en",
+            # add_watermark=False,
+            # seed=seed,
             safety_filter_level="block_some",
             person_generation="allow_adult",
         )
