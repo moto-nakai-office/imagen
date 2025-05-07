@@ -27,7 +27,9 @@ def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
         scale_factor = (max_pixels / total_pixels) ** 0.5  # 縮小比率を計算
         new_width = int(width * scale_factor)
         new_height = int(height * scale_factor)
-        pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # どのバージョンのPillowでも動作するリサイズ方法
+        pil_image = pil_image.resize((new_width, new_height))
 
     # 圧縮とリサイズを繰り返し、指定サイズ以下になるまで試行
     while True:
@@ -50,7 +52,9 @@ def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
         width, height = pil_image.size
         width = int(width * 0.9)
         height = int(height * 0.9)
-        pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
+        
+        # どのバージョンのPillowでも動作するリサイズ方法
+        pil_image = pil_image.resize((width, height))
 
     return buffer.getvalue()
 
