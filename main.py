@@ -310,6 +310,7 @@ def test_param():
 
 
 if __name__ == "__main__":
-    # Cloud Runのデフォルトポートを使用
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    # 環境変数PORTを明示的に取得
+    port = int(os.environ.get('PORT', 8080))
+    # ホストは必ず'0.0.0.0'に設定
+    app.run(host='0.0.0.0', port=port, debug=False)
