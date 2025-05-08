@@ -1,4 +1,4 @@
 functions-framework==3.0.0
 Pillow==9.5.0
-google-cloud-aiplatform==1.36.0
+google-cloud-aiplatform==1.71.1
 vertexai==0.0.1
