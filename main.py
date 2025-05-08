@@ -2,17 +2,18 @@ import os
 import base64
 from io import BytesIO
 import json
+import traceback
 from flask import Flask, request, jsonify
 from PIL import Image
 import vertexai
-from vertexai.preview.vision_models import Image, ImageGenerationModel
+from vertexai.preview.vision_models import ImageGenerationModel
 
 # Flaskアプリケーションの初期化
 app = Flask(__name__)
 
 # Vertex AI初期化
 PROJECT_ID = os.getenv("PROJECT_ID")
-LOCATION = os.getenv("REGION", "us-central1")
+LOCATION = os.getenv("REGION", os.getenv("LOCATION", "us-central1"))
 vertexai.init(project=PROJECT_ID, location=LOCATION)
 
 def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
@@ -62,7 +63,7 @@ def imagen_generate(
     prompt, 
     negative_prompt="", 
     seed=None, 
-    aspect_ratio
+    aspect_ratio="1:1"
 ):
     try:
         # Vertex AIのImagen 3.0モデルを初期化
@@ -74,7 +75,6 @@ def imagen_generate(
             number_of_images=1,
             negative_prompt=negative_prompt,
             aspect_ratio=aspect_ratio,
-            language="en",
             add_watermark=False,
             seed=seed,
             safety_filter_level="block_medium_and_above",
@@ -97,6 +97,8 @@ def imagen_generate(
 
         return image_list, None
     except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"エラー詳細: {error_details}", flush=True)
         return None, str(e)
 
 @app.route("/generate", methods=["POST"])
@@ -133,7 +135,9 @@ def generate():
         })
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"エラー詳細: {error_details}", flush=True)
+        return jsonify({"error": str(e), "details": error_details}), 500
 
 @app.route("/", methods=["GET"])
 def health_check():
@@ -148,7 +152,7 @@ def debug():
         
         # ImageGenerationModelの情報
         from vertexai.preview.vision_models import ImageGenerationModel
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
         
         # メソッドのシグネチャを調査
         import inspect
@@ -161,16 +165,18 @@ def debug():
             "environment": {k: v for k, v in os.environ.items() if k.startswith("GOOGLE_")}
         })
     except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()})
+        error_details = traceback.format_exc()
+        return jsonify({"error": str(e), "traceback": error_details})
 
 @app.route("/debug/params", methods=["GET"])
 def debug_params():
     try:
         # Vertex AIのバージョン情報
+        import inspect
         vertexai_version = getattr(vertexai, "__version__", "不明")
         
         # ImageGenerationModelの初期化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
         
         # generate_imagesメソッドのシグネチャを取得
         method_signature = inspect.signature(model.generate_images)
@@ -210,17 +216,18 @@ def debug_params():
             "source_location": source_info
         })
     except Exception as e:
+        error_details = traceback.format_exc()
         return jsonify({
             "status": "error",
             "error": str(e),
-            "traceback": traceback.format_exc()
+            "traceback": error_details
         }), 500
 
 @app.route("/debug/model", methods=["GET"])
 def debug_model():
     try:
         # モデルのインスタンス化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
         
         # クラスのメソッド一覧を取得
         methods = {}
@@ -253,10 +260,11 @@ def debug_model():
             "attributes": attributes
         })
     except Exception as e:
+        error_details = traceback.format_exc()
         return jsonify({
             "status": "error",
             "error": str(e),
-            "traceback": traceback.format_exc()
+            "traceback": error_details
         }), 500
 
 @app.route("/debug/test-param", methods=["POST"])
@@ -269,7 +277,7 @@ def test_param():
         param_value = data.get("param_value")
         
         # モデルをインスタンス化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
         
         # 基本パラメータ
         params = {
@@ -302,10 +310,11 @@ def test_param():
             "result": result_info
         })
     except Exception as e:
+        error_details = traceback.format_exc()
         return jsonify({
             "status": "error",
             "error": str(e),
-            "traceback": traceback.format_exc()
+            "traceback": error_details
         }), 500
 
 
