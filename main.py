@@ -58,7 +58,12 @@ def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
 
     return buffer.getvalue()
 
-def imagen_generate(prompt, negative_prompt="", seed=None, aspect_ratio="3:4"):
+def imagen_generate(
+    prompt, 
+    negative_prompt="", 
+    seed=None, 
+    aspect_ratio="3:4"
+):
     try:
         # Vertex AIのImagen 3.0モデルを初期化
         model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
@@ -134,6 +139,30 @@ def generate():
 def health_check():
     return jsonify({"status": "healthy", "service": "imagen-api"})
 
+@app.route("/debug", methods=["GET"])
+def debug():
+    try:
+        # Vertex AIのバージョン情報
+        import vertexai
+        vertexai_version = getattr(vertexai, "__version__", "不明")
+        
+        # ImageGenerationModelの情報
+        from vertexai.preview.vision_models import ImageGenerationModel
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        
+        # メソッドのシグネチャを調査
+        import inspect
+        method_signature = str(inspect.signature(model.generate_images))
+        
+        return jsonify({
+            "status": "success",
+            "vertexai_version": vertexai_version,
+            "method_signature": method_signature,
+            "environment": {k: v for k, v in os.environ.items() if k.startswith("GOOGLE_")}
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()})
+        
 if __name__ == "__main__":
     # Cloud Runのデフォルトポートを使用
     port = int(os.environ.get("PORT", 8080))
