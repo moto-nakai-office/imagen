@@ -162,7 +162,153 @@ def debug():
         })
     except Exception as e:
         return jsonify({"error": str(e), "traceback": traceback.format_exc()})
+
+@app.route("/debug/params", methods=["GET"])
+def debug_params():
+    try:
+        # Vertex AIのバージョン情報
+        vertexai_version = getattr(vertexai, "__version__", "不明")
         
+        # ImageGenerationModelの初期化
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        
+        # generate_imagesメソッドのシグネチャを取得
+        method_signature = inspect.signature(model.generate_images)
+        
+        # パラメータ情報を取得
+        params_info = {}
+        for param_name, param in method_signature.parameters.items():
+            params_info[param_name] = {
+                "name": param_name,
+                "default": str(param.default) if param.default is not inspect.Parameter.empty else "必須",
+                "kind": str(param.kind),
+                "annotation": str(param.annotation) if param.annotation is not inspect.Parameter.empty else "不明"
+            }
+        
+        # docstringからパラメータ情報を抽出
+        docstring = model.generate_images.__doc__ or "ドキュメント文字列なし"
+        
+        # モジュール情報の取得
+        module_info = {
+            "module_name": model.__class__.__module__,
+            "model_class": model.__class__.__name__
+        }
+        
+        # ソースコードの位置を取得（可能な場合）
+        try:
+            source_info = inspect.getfile(model.__class__)
+        except:
+            source_info = "取得不可"
+        
+        return jsonify({
+            "status": "success",
+            "vertexai_version": vertexai_version,
+            "method_signature": str(method_signature),
+            "parameters": params_info,
+            "docstring": docstring,
+            "module_info": module_info,
+            "source_location": source_info
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+@app.route("/debug/model", methods=["GET"])
+def debug_model():
+    try:
+        # モデルのインスタンス化
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        
+        # クラスのメソッド一覧を取得
+        methods = {}
+        for method_name in dir(model):
+            if not method_name.startswith("_"):  # 非プライベートメソッドのみ
+                method = getattr(model, method_name)
+                if callable(method):
+                    try:
+                        methods[method_name] = {
+                            "signature": str(inspect.signature(method)),
+                            "doc": inspect.getdoc(method) or "ドキュメントなし"
+                        }
+                    except:
+                        methods[method_name] = {"error": "シグネチャ取得不可"}
+        
+        # クラスの属性を取得
+        attributes = {}
+        for attr_name in dir(model):
+            if not attr_name.startswith("_") and attr_name not in methods:
+                try:
+                    attr_value = getattr(model, attr_name)
+                    attributes[attr_name] = str(type(attr_value))
+                except:
+                    attributes[attr_name] = "取得不可"
+        
+        return jsonify({
+            "status": "success",
+            "class_name": model.__class__.__name__,
+            "methods": methods,
+            "attributes": attributes
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+@app.route("/debug/test-param", methods=["POST"])
+def test_param():
+    try:
+        # リクエストからデータを取得
+        data = request.get_json()
+        prompt = data.get("prompt", "富士山")
+        param_name = data.get("param_name")
+        param_value = data.get("param_value")
+        
+        # モデルをインスタンス化
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        
+        # 基本パラメータ
+        params = {
+            "prompt": prompt,
+            "number_of_images": 1
+        }
+        
+        # テスト対象のパラメータを追加
+        if param_name and param_value is not None:
+            params[param_name] = param_value
+        
+        # 結果
+        result_info = {
+            "tested_param": param_name,
+            "param_value": param_value,
+            "params_used": params
+        }
+            
+        # テスト実行（実際の画像生成はスキップ可能）
+        if data.get("execute", False):
+            try:
+                response = model.generate_images(**params)
+                result_info["execution"] = "成功"
+            except Exception as exec_error:
+                result_info["execution"] = "失敗"
+                result_info["execution_error"] = str(exec_error)
+        
+        return jsonify({
+            "status": "success",
+            "result": result_info
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 if __name__ == "__main__":
     # Cloud Runのデフォルトポートを使用
     port = int(os.environ.get("PORT", 8080))
