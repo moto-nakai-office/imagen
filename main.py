@@ -62,7 +62,7 @@ def imagen_generate(
     prompt, 
     negative_prompt="", 
     seed=None, 
-    aspect_ratio="3:4"
+    aspect_ratio
 ):
     try:
         # Vertex AIのImagen 3.0モデルを初期化
@@ -74,11 +74,11 @@ def imagen_generate(
             number_of_images=1,
             negative_prompt=negative_prompt,
             aspect_ratio=aspect_ratio,
-            language="en",
+            language='en',
             add_watermark=False,
             seed=seed,
-            safety_filter_level="block_medium_and_above",
-            person_generation="allow_adult"
+            safety_filter_level='block_medium_and_above',
+            person_generation='allow_adult'
         )
         
         image_list = []
