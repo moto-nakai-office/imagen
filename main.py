@@ -7,6 +7,7 @@ from flask import Flask, request, jsonify
 from PIL import Image
 import vertexai
 from vertexai.preview.vision_models import ImageGenerationModel
+import random
 
 # Flaskアプリケーションの初期化
 app = Flask(__name__)
@@ -66,27 +67,30 @@ def imagen_generate(
     aspect_ratio="1:1"
 ):
     try:
+        # seedがNoneの場合、Uint32の範囲で乱数を生成
+        generated_seed = None
+        if seed is None:
+            # Uint32の範囲（0〜2^32-1）で乱数を生成
+            generated_seed = random.randint(0, 2**32-1)
+            seed = generated_seed  # 生成した乱数をseedとして使用
+        
         # Vertex AIのImagen 3.0モデルを初期化
         model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
-        model_version = "imagen-3.0-generate-002"  # モデルバージョンを記録
+        model_version = "imagen-3.0-generate-002"
         
-        # 画像生成リクエスト
+        # 画像生成リクエスト（生成したseedを使用）
         generate_response = model.generate_images(
             prompt=prompt,
             number_of_images=1,
             negative_prompt=negative_prompt,
             aspect_ratio=aspect_ratio,
             add_watermark=False,
-            # compression_quality="",
-            # output_mime_type="",
-            # output_gcs_uri="",
-            # enhancePrompt=true,
-            seed=seed,
+            seed=seed,  # 自動生成したseedまたはユーザー指定のseed
             safety_filter_level="block_medium_and_above",
             person_generation="allow_adult"
         )
         
-        # 生レスポンスデータの取得（可能な範囲で）
+        # 生レスポンスデータの取得
         raw_response = {}
         try:
             # generate_responseオブジェクトから取得できる情報を収集
@@ -102,7 +106,7 @@ def imagen_generate(
             # PIL Imageオブジェクトを取得
             pil_image = generate_response[index]._pil_image
 
-            # 画像を2MB以下に圧縮してバイト列を取得
+            # 画像を圧縮してバイト列を取得
             compressed_image_bytes = compress_image(pil_image)
 
             # base64エンコード
@@ -111,12 +115,12 @@ def imagen_generate(
             # エンコードされた画像をリストに追加
             image_list.append(img_str)
 
-        # モデルバージョンと生レスポンスを含めて返却
-        return image_list, None, model_version, raw_response
+        # 実際に使用したseed値（自動生成または指定値）を返す
+        return image_list, None, model_version, raw_response, seed
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"エラー詳細: {error_details}", flush=True)
-        return None, str(e), None, None
+        return None, str(e), None, None, None
 
 @app.route("/generate", methods=["POST"])
 def generate():
@@ -130,26 +134,28 @@ def generate():
             
         prompt = data["prompt"]
         negative_prompt = data.get("negative_prompt", "")
-        seed = data.get("seed", None)
+        seed = data.get("seed", None)  # ユーザーからのseedがない場合はNone
         aspect_ratio = data.get("aspect_ratio", "3:4")
         
         # 画像生成（修正版関数を呼び出し）
-        images, error, model_version, raw_response = imagen_generate(prompt, negative_prompt, seed, aspect_ratio)
+        images, error, model_version, raw_response, used_seed = imagen_generate(
+            prompt, negative_prompt, seed, aspect_ratio
+        )
         
         if error:
             return jsonify({"error": error}), 500
             
-        # 結果を返却（拡張バージョン）
+        # 結果を返却（使用したseed値を含む）
         return jsonify({
             "status": "success",
             "data": {
                 "images": images,
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
-                "seed": seed,
+                "seed": used_seed,  # 実際に使用したseed値（自動生成または指定値）
                 "aspect_ratio": aspect_ratio,
-                "model_version": model_version,  # モデルバージョンを追加
-                "raw_response": raw_response     # 生レスポンス情報を追加
+                "model_version": model_version,
+                "raw_response": raw_response
             }
         })
         
