@@ -1,325 +1,463 @@
-import os
+import streamlit as st
+import requests
 import base64
 from io import BytesIO
-import json
-import traceback
-from flask import Flask, request, jsonify
 from PIL import Image
-import vertexai
-from vertexai.preview.vision_models import ImageGenerationModel
+import json
+import time
+import os
+import uuid
+from datetime import datetime
+from google.cloud import storage
+from google.cloud import bigquery
 
-# Flaskアプリケーションの初期化
-app = Flask(__name__)
+# ページ設定
+st.set_page_config(
+    page_title="Gemini画像生成",
+    page_icon="🎨",
+    layout="wide",
+)
 
-# Vertex AI初期化
-PROJECT_ID = os.getenv("PROJECT_ID")
-LOCATION = os.getenv("REGION", os.getenv("LOCATION", "us-central1"))
-vertexai.init(project=PROJECT_ID, location=LOCATION)
-
-def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
-    # 画像サイズをチェックしながらJPEGで圧縮、必要に応じて画像を縮小
-    quality = 50
-    buffer = BytesIO()
-    width, height = pil_image.size
-
-    # まず、画像の総ピクセル数が100万を超えている場合、縮小します
-    total_pixels = width * height
-    if total_pixels > max_pixels:
-        scale_factor = (max_pixels / total_pixels) ** 0.5  # 縮小比率を計算
-        new_width = int(width * scale_factor)
-        new_height = int(height * scale_factor)
-        
-        # どのバージョンのPillowでも動作するリサイズ方法
-        pil_image = pil_image.resize((new_width, new_height))
-
-    # 圧縮とリサイズを繰り返し、指定サイズ以下になるまで試行
-    while True:
-        buffer.seek(0)
-        buffer.truncate()
-
-        # 現在のサイズを確認
-        pil_image.save(buffer, format="JPEG", quality=quality)
-        size = buffer.tell()
-
-        if size <= max_size:
-            break  # 目標サイズに収まった場合
-
-        # サイズが大きい場合、クオリティを下げてリサイズ
-        quality -= 5
-        if quality < 10:  # クオリティが極端に低くならないように制限
-            quality = 10
-
-        # 解像度がまだ大きい場合はさらに縮小
-        width, height = pil_image.size
-        width = int(width * 0.9)
-        height = int(height * 0.9)
-        
-        # どのバージョンのPillowでも動作するリサイズ方法
-        pil_image = pil_image.resize((width, height))
-
-    return buffer.getvalue()
-
-def imagen_generate(
-    prompt, 
-    negative_prompt="", 
-    seed=None, 
-    aspect_ratio="1:1"
-):
+# GCSに画像を保存する関数
+def save_image_to_gcs(image_data, bucket_name, prompt):
+    """Base64画像データをGCSに保存"""
     try:
-        # Vertex AIのImagen 3.0モデルを初期化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
+        # ファイル名を生成（一意のID + タイムスタンプ + プロンプトの短縮版）
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
         
-        # 画像生成リクエスト
-        generate_response = model.generate_images(
-            prompt=prompt,
-            number_of_images=1,
-            negative_prompt=negative_prompt,
-            aspect_ratio=aspect_ratio,
-            add_watermark=False,
-            seed=seed,
-            safety_filter_level="block_medium_and_above",
-            person_generation="allow_adult"
+        # プロンプトからファイル名用の文字列を生成（短くして特殊文字を除去）
+        prompt_slug = "".join(c for c in prompt[:30] if c.isalnum() or c.isspace()).strip().replace(" ", "_")
+        if not prompt_slug:
+            prompt_slug = "image"
+            
+        filename = f"{timestamp}_{unique_id}_{prompt_slug}.png"
+        
+        # GCSクライアントを初期化
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(f"gemini_images/{filename}")
+        
+        # 画像データをPNGとして保存
+        img = Image.open(BytesIO(base64.b64decode(image_data)))
+        img_byte_arr = BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+        
+        # GCSにアップロード
+        blob.upload_from_file(img_byte_arr, content_type='image/png')
+        
+        # 公開URLを生成
+        image_url = f"gs://{bucket_name}/gemini_images/{filename}"
+        public_url = f"https://storage.googleapis.com/{bucket_name}/gemini_images/{filename}"
+        
+        return {
+            "success": True,
+            "gcs_uri": image_url,
+            "public_url": public_url,
+            "filename": filename
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+# BigQueryにログを保存する関数
+def log_to_bigquery(data, project_id, dataset_id, table_id):
+    """生成情報をBigQueryに保存"""
+    try:
+        # BigQueryクライアントを初期化
+        bq_client = bigquery.Client(project=project_id)
+        table_ref = f"{project_id}.{dataset_id}.{table_id}"
+        
+        # 行を挿入
+        errors = bq_client.insert_rows_json(
+            table_ref,
+            [data]
         )
         
-        image_list = []
-        for index, result in enumerate(generate_response):
-            # PIL Imageオブジェクトを取得
-            pil_image = generate_response[index]._pil_image
-
-            # 画像を2MB以下に圧縮してバイト列を取得
-            compressed_image_bytes = compress_image(pil_image)
-
-            # base64エンコード
-            img_str = base64.b64encode(compressed_image_bytes).decode("utf-8")
-
-            # エンコードされた画像をリストに追加
-            image_list.append(img_str)
-
-        return image_list, None
+        if errors:
+            return {"success": False, "errors": errors}
+        else:
+            return {"success": True}
     except Exception as e:
-        error_details = traceback.format_exc()
-        print(f"エラー詳細: {error_details}", flush=True)
-        return None, str(e)
+        return {"success": False, "error": str(e)}
 
-@app.route("/generate", methods=["POST"])
-def generate():
-    try:
-        # リクエストから必要なパラメータを取得
-        data = request.get_json()
+# タイトルとヘッダー
+st.title("Gemini AI 画像生成アプリ")
+st.markdown("Gemini 2.0を使って、テキストプロンプトから画像を生成できます。")
+
+# サイドバーにAPI設定
+with st.sidebar:
+    st.header("API設定")
+    api_url = st.text_input(
+        "API URL", 
+        value="https://gemini-api-xxxxxx-uc.a.run.app/generate-image",
+        help="画像生成APIのエンドポイントURL"
+    )
+    
+    # API情報取得用エンドポイント
+    api_info_url = api_url.rsplit('/', 1)[0] + "/info" if "/" in api_url else api_url + "/info"
+    
+    # 詳細設定
+    st.markdown("---")
+    st.header("詳細設定")
+    aspect_ratio = st.selectbox(
+        "アスペクト比",
+        options=["16:9", "1:1", "3:4", "4:3", "9:16"],
+        index=0,
+        help="生成する画像のアスペクト比"
+    )
+    
+    seed = st.number_input(
+        "シード値",
+        min_value=0,
+        max_value=1000000,
+        value=0,
+        help="同じ結果を再現するためのシード値（0はランダム）"
+    )
+    
+    # ログ設定
+    st.markdown("---")
+    st.header("ログ設定")
+    
+    logging_enabled = st.toggle("ログ記録を有効にする", value=False)
+    
+    if logging_enabled:
+        # GCS設定
+        gcs_bucket = st.text_input(
+            "GCSバケット名",
+            value="your-bucket-name",
+            help="生成画像を保存するGCSバケット"
+        )
         
-        # バリデーション
-        if not data or "prompt" not in data or not data["prompt"]:
-            return jsonify({"error": "プロンプトは必須です"}), 400
+        # BigQuery設定
+        bq_expander = st.expander("BigQuery設定", expanded=True)
+        with bq_expander:
+            bq_project = st.text_input("プロジェクトID", value="your-project-id")
+            bq_dataset = st.text_input("データセットID", value="gemini_logs")
+            bq_table = st.text_input("テーブル名", value="image_generation_logs")
             
-        prompt = data["prompt"]
-        negative_prompt = data.get("negative_prompt", "")
-        seed = data.get("seed", None)
-        aspect_ratio = data.get("aspect_ratio", "3:4")
-        
-        # 画像生成
-        images, error = imagen_generate(prompt, negative_prompt, seed, aspect_ratio)
-        
-        if error:
-            return jsonify({"error": error}), 500
-            
-        # 結果を返却
-        return jsonify({
-            "status": "success",
-            "data": {
-                "images": images,
-                "prompt": prompt,
-                "negative_prompt": negative_prompt,
-                "seed": seed,
-                "aspect_ratio": aspect_ratio
-            }
-        })
-        
-    except Exception as e:
-        error_details = traceback.format_exc()
-        print(f"エラー詳細: {error_details}", flush=True)
-        return jsonify({"error": str(e), "details": error_details}), 500
+            st.info("""
+            BigQueryテーブルは以下のスキーマが必要です:
+            - timestamp: TIMESTAMP
+            - prompt: STRING
+            - negative_prompt: STRING
+            - model_version: STRING
+            - aspect_ratio: STRING
+            - seed: INTEGER
+            - gcs_uri: STRING
+            - public_url: STRING
+            """)
+    
+    # デバッグモード
+    st.markdown("---")
+    debug_mode = st.checkbox("デバッグモード", value=True, help="APIレスポンスの詳細を表示します")
+    
+    st.markdown("---")
+    st.header("About")
+    st.markdown("このアプリはVertex AI Gemini 2.0を使用した画像生成APIと連携しています。")
 
-@app.route("/", methods=["GET"])
-def health_check():
-    return jsonify({"status": "healthy", "service": "imagen-api"})
-
-@app.route("/debug", methods=["GET"])
-def debug():
+# APIからモデル情報を取得する試み
+@st.cache_data(ttl=3600)  # 1時間キャッシュ
+def get_api_info(url):
     try:
-        # Vertex AIのバージョン情報
-        import vertexai
-        vertexai_version = getattr(vertexai, "__version__", "不明")
-        
-        # ImageGenerationModelの情報
-        from vertexai.preview.vision_models import ImageGenerationModel
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
-        
-        # メソッドのシグネチャを調査
-        import inspect
-        method_signature = str(inspect.signature(model.generate_images))
-        
-        return jsonify({
-            "status": "success",
-            "vertexai_version": vertexai_version,
-            "method_signature": method_signature,
-            "environment": {k: v for k, v in os.environ.items() if k.startswith("GOOGLE_")}
-        })
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return {"error": f"ステータスコード: {response.status_code}"}
     except Exception as e:
-        error_details = traceback.format_exc()
-        return jsonify({"error": str(e), "traceback": error_details})
+        return {"error": str(e)}
 
-@app.route("/debug/params", methods=["GET"])
-def debug_params():
-    try:
-        # Vertex AIのバージョン情報
-        import inspect
-        vertexai_version = getattr(vertexai, "__version__", "不明")
-        
-        # ImageGenerationModelの初期化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
-        
-        # generate_imagesメソッドのシグネチャを取得
-        method_signature = inspect.signature(model.generate_images)
-        
-        # パラメータ情報を取得
-        params_info = {}
-        for param_name, param in method_signature.parameters.items():
-            params_info[param_name] = {
-                "name": param_name,
-                "default": str(param.default) if param.default is not inspect.Parameter.empty else "必須",
-                "kind": str(param.kind),
-                "annotation": str(param.annotation) if param.annotation is not inspect.Parameter.empty else "不明"
-            }
-        
-        # docstringからパラメータ情報を抽出
-        docstring = model.generate_images.__doc__ or "ドキュメント文字列なし"
-        
-        # モジュール情報の取得
-        module_info = {
-            "module_name": model.__class__.__module__,
-            "model_class": model.__class__.__name__
-        }
-        
-        # ソースコードの位置を取得（可能な場合）
-        try:
-            source_info = inspect.getfile(model.__class__)
-        except:
-            source_info = "取得不可"
-        
-        return jsonify({
-            "status": "success",
-            "vertexai_version": vertexai_version,
-            "method_signature": str(method_signature),
-            "parameters": params_info,
-            "docstring": docstring,
-            "module_info": module_info,
-            "source_location": source_info
-        })
-    except Exception as e:
-        error_details = traceback.format_exc()
-        return jsonify({
-            "status": "error",
-            "error": str(e),
-            "traceback": error_details
-        }), 500
+# モデル情報の取得を試みる
+try:
+    api_info = get_api_info(api_info_url)
+    if "error" not in api_info and "model_version" in api_info:
+        model_version = api_info["model_version"]
+    else:
+        model_version = "unknown"  # デフォルト値
+except:
+    model_version = "unknown"  # デフォルト値
 
-@app.route("/debug/model", methods=["GET"])
-def debug_model():
-    try:
-        # モデルのインスタンス化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
-        
-        # クラスのメソッド一覧を取得
-        methods = {}
-        for method_name in dir(model):
-            if not method_name.startswith("_"):  # 非プライベートメソッドのみ
-                method = getattr(model, method_name)
-                if callable(method):
-                    try:
-                        methods[method_name] = {
-                            "signature": str(inspect.signature(method)),
-                            "doc": inspect.getdoc(method) or "ドキュメントなし"
-                        }
-                    except:
-                        methods[method_name] = {"error": "シグネチャ取得不可"}
-        
-        # クラスの属性を取得
-        attributes = {}
-        for attr_name in dir(model):
-            if not attr_name.startswith("_") and attr_name not in methods:
-                try:
-                    attr_value = getattr(model, attr_name)
-                    attributes[attr_name] = str(type(attr_value))
-                except:
-                    attributes[attr_name] = "取得不可"
-        
-        return jsonify({
-            "status": "success",
-            "class_name": model.__class__.__name__,
-            "methods": methods,
-            "attributes": attributes
-        })
-    except Exception as e:
-        error_details = traceback.format_exc()
-        return jsonify({
-            "status": "error",
-            "error": str(e),
-            "traceback": error_details
-        }), 500
+# メインコンテンツ - 2カラムレイアウト
+col1, col2 = st.columns([1, 1])
 
-@app.route("/debug/test-param", methods=["POST"])
-def test_param():
-    try:
-        # リクエストからデータを取得
-        data = request.get_json()
-        prompt = data.get("prompt", "富士山")
-        param_name = data.get("param_name")
-        param_value = data.get("param_value")
-        
-        # モデルをインスタンス化
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
-        
-        # 基本パラメータ
-        params = {
-            "prompt": prompt,
-            "number_of_images": 1
-        }
-        
-        # テスト対象のパラメータを追加
-        if param_name and param_value is not None:
-            params[param_name] = param_value
-        
-        # 結果
-        result_info = {
-            "tested_param": param_name,
-            "param_value": param_value,
-            "params_used": params
-        }
-            
-        # テスト実行（実際の画像生成はスキップ可能）
-        if data.get("execute", False):
+with col1:
+    st.header("プロンプト入力")
+    
+    # プロンプト入力
+    prompt = st.text_area(
+        "画像生成プロンプト",
+        value="富士山と桜の風景、春の朝",
+        height=150,
+        help="生成したい画像の説明を入力してください"
+    )
+    
+    # ネガティブプロンプト
+    negative_prompt = st.text_area(
+        "ネガティブプロンプト（任意）",
+        value="",
+        height=100,
+        help="画像に含めたくない要素を指定します"
+    )
+    
+    # 生成ボタン
+    if st.button("画像を生成", type="primary", use_container_width=True):
+        with st.spinner("画像を生成中..."):
             try:
-                response = model.generate_images(**params)
-                result_info["execution"] = "成功"
-            except Exception as exec_error:
-                result_info["execution"] = "失敗"
-                result_info["execution_error"] = str(exec_error)
+                # リクエスト開始時間
+                start_time = time.time()
+                
+                # APIリクエストデータ
+                request_data = {
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt
+                }
+                
+                # シード値が指定されている場合
+                if seed > 0:
+                    request_data["seed"] = seed
+                
+                # アスペクト比を追加
+                if aspect_ratio:
+                    request_data["aspect_ratio"] = aspect_ratio
+                
+                # デバッグ表示
+                if debug_mode:
+                    st.subheader("リクエスト内容")
+                    st.json(request_data)
+                
+                # APIリクエスト
+                response = requests.post(
+                    api_url,
+                    json=request_data,
+                    headers={"Content-Type": "application/json"},
+                    timeout=120  # タイムアウトを長めに設定
+                )
+                
+                # 処理時間
+                process_time = time.time() - start_time
+                
+                # デバッグ情報
+                if debug_mode:
+                    st.subheader("APIレスポンス詳細")
+                    debug_container = st.container()
+                    with debug_container:
+                        col_status, col_time = st.columns(2)
+                        with col_status:
+                            st.metric("ステータスコード", response.status_code)
+                        with col_time:
+                            st.metric("処理時間", f"{process_time:.2f}秒")
+                        
+                        st.markdown("#### レスポンスヘッダー")
+                        st.json(dict(response.headers))
+                        
+                        st.markdown("#### レスポンス内容")
+                        try:
+                            resp_json = response.json()
+                            # データ量が多い場合は画像データを省略して表示
+                            if "data" in resp_json and "images" in resp_json["data"] and resp_json["data"]["images"]:
+                                display_json = resp_json.copy()
+                                images = display_json["data"]["images"]
+                                # 各画像を省略表示に置き換え
+                                display_json["data"]["images"] = [
+                                    f"[BASE64エンコード画像データ: {len(img)}文字]" for img in images
+                                ]
+                                st.json(display_json)
+                            else:
+                                st.json(resp_json)
+                            
+                            # レスポンス構造の確認
+                            st.text(f"レスポンスのキー: {list(resp_json.keys())}")
+                            if "data" in resp_json:
+                                st.text(f"data内のキー: {list(resp_json['data'].keys())}")
+                                if "images" in resp_json["data"]:
+                                    st.text(f"images配列の長さ: {len(resp_json['data']['images'])}")
+                                
+                                # model_versionがレスポンスに含まれている場合は取得
+                                if "model_version" in resp_json["data"]:
+                                    model_version = resp_json["data"]["model_version"]
+                                elif "model" in resp_json["data"]:
+                                    model_version = resp_json["data"]["model"]
+                        except:
+                            st.text("JSONではないレスポンス:")
+                            st.text(response.text[:1000])  # 長すぎる場合は一部のみ表示
+                
+                # レスポンス確認
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    # model_versionの取得を試みる
+                    if "data" in result:
+                        if "model_version" in result["data"]:
+                            model_version = result["data"]["model_version"]
+                        elif "model" in result["data"]:
+                            model_version = result["data"]["model"]
+                    
+                    # 正しいパスから画像データを取得
+                    if ("status" in result and result["status"] == "success" and 
+                            "data" in result and "images" in result["data"] and 
+                            result["data"]["images"]):
+                        # 画像データを保存
+                        image_data = result["data"]["images"][0]
+                        st.session_state.generated_image = image_data
+                        st.session_state.last_prompt = prompt
+                        st.session_state.last_negative_prompt = negative_prompt
+                        st.session_state.last_aspect_ratio = aspect_ratio
+                        st.session_state.last_seed = seed if seed > 0 else None
+                        st.session_state.model_version = model_version
+                        st.success("画像が生成されました！")
+                        
+                        # ログ記録が有効な場合、GCSとBigQueryに保存
+                        if logging_enabled:
+                            log_section = st.container()
+                            with log_section:
+                                st.markdown("#### ログ記録")
+                                
+                                # GCSに画像を保存
+                                with st.spinner("画像をGCSに保存中..."):
+                                    gcs_result = save_image_to_gcs(
+                                        image_data, 
+                                        gcs_bucket, 
+                                        prompt
+                                    )
+                                    
+                                    if gcs_result["success"]:
+                                        st.session_state.gcs_uri = gcs_result["gcs_uri"]
+                                        st.session_state.public_url = gcs_result["public_url"]
+                                        st.success(f"GCSに画像を保存しました: {gcs_result['filename']}")
+                                        
+                                        # BigQueryにログを保存
+                                        with st.spinner("BigQueryにログを記録中..."):
+                                            log_data = {
+                                                "timestamp": datetime.now().isoformat(),
+                                                "prompt": prompt,
+                                                "negative_prompt": negative_prompt,
+                                                "model_version": model_version,
+                                                "aspect_ratio": aspect_ratio,
+                                                "seed": seed if seed > 0 else None,
+                                                "gcs_uri": gcs_result["gcs_uri"],
+                                                "public_url": gcs_result["public_url"]
+                                            }
+                                            
+                                            bq_result = log_to_bigquery(
+                                                log_data,
+                                                bq_project,
+                                                bq_dataset,
+                                                bq_table
+                                            )
+                                            
+                                            if bq_result["success"]:
+                                                st.success("BigQueryにログを記録しました")
+                                            else:
+                                                st.error(f"BigQueryへの記録に失敗: {bq_result.get('error', bq_result.get('errors', '不明なエラー'))}")
+                                    else:
+                                        st.error(f"GCSへの保存に失敗: {gcs_result.get('error', '不明なエラー')}")
+                    else:
+                        # 構造を表示して問題をデバッグ
+                        st.error("画像データが正しい形式で返されていません")
+                        st.write("レスポンス構造:", result.keys())
+                        if "data" in result:
+                            st.write("data内の構造:", result["data"].keys())
+                            if "images" in result["data"]:
+                                st.write("images配列の長さ:", len(result["data"]["images"]))
+                else:
+                    error_message = f"エラー: {response.status_code}"
+                    try:
+                        error_detail = response.json().get("error", "詳細不明")
+                        error_message += f" - {error_detail}"
+                    except:
+                        error_message += f" - レスポンス: {response.text[:200]}..."
+                    st.error(error_message)
+            except Exception as e:
+                st.error(f"リクエスト中にエラーが発生しました: {str(e)}")
+                import traceback
+                if debug_mode:
+                    st.code(traceback.format_exc())
+    
+    # 履歴表示
+    if "generated_image" in st.session_state:
+        st.markdown("---")
+        st.subheader("生成設定")
         
-        return jsonify({
-            "status": "success",
-            "result": result_info
-        })
-    except Exception as e:
-        error_details = traceback.format_exc()
-        return jsonify({
-            "status": "error",
-            "error": str(e),
-            "traceback": error_details
-        }), 500
+        # 設定情報を表示
+        settings_container = st.container()
+        with settings_container:
+            st.markdown(f"**プロンプト**: {st.session_state.last_prompt}")
+            
+            if st.session_state.last_negative_prompt:
+                st.markdown(f"**ネガティブプロンプト**: {st.session_state.last_negative_prompt}")
+            
+            # モデル情報と生成設定を表示
+            col_model, col_aspect, col_seed = st.columns(3)
+            with col_model:
+                st.markdown(f"**モデル**: {st.session_state.model_version}")
+            with col_aspect:
+                st.markdown(f"**アスペクト比**: {st.session_state.last_aspect_ratio}")
+            with col_seed:
+                seed_value = st.session_state.last_seed if hasattr(st.session_state, 'last_seed') else "ランダム"
+                st.markdown(f"**シード値**: {seed_value}")
+            
+            # GCS情報表示
+            if hasattr(st.session_state, 'public_url'):
+                st.markdown("---")
+                st.markdown(f"**GCS URI**: `{st.session_state.gcs_uri}`")
+                st.markdown(f"**公開URL**: [画像リンク]({st.session_state.public_url})")
 
+# 生成画像表示エリア
+with col2:
+    st.header("生成画像")
+    if "generated_image" in st.session_state:
+        try:
+            # Base64デコードして画像を表示
+            image_data = base64.b64decode(st.session_state.generated_image)
+            img = Image.open(BytesIO(image_data))
+            st.image(img, use_column_width=True)
+            
+            # モデル情報を表示
+            if hasattr(st.session_state, 'model_version'):
+                st.caption(f"モデル: {st.session_state.model_version}")
+            
+            # ダウンロードボタン
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            btn = st.download_button(
+                label="画像をダウンロード",
+                data=buf.getvalue(),
+                file_name="generated_image.png",
+                mime="image/png",
+                use_container_width=True
+            )
+        except Exception as img_error:
+            st.error(f"画像の表示中にエラーが発生しました: {str(img_error)}")
+            
+            # デバッグ情報
+            if debug_mode:
+                st.text(f"画像データの先頭部分: {st.session_state.generated_image[:50]}...")
+                st.text(f"画像データの長さ: {len(st.session_state.generated_image)}")
+    else:
+        st.info("プロンプトを入力して「画像を生成」ボタンをクリックしてください")
 
+# フッター
+st.markdown("---")
+st.markdown("Powered by Google Vertex AI Gemini 2.0")
+
+# Cloud Run対応のポート設定
 if __name__ == "__main__":
-    # 環境変数PORTを明示的に取得
-    port = int(os.environ.get('PORT', 8080))
-    # ホストは必ず'0.0.0.0'に設定
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # 環境変数PORTの値を取得（デフォルトは8501）
+    port = int(os.environ.get("PORT", 8501))
+    # デバッグ情報としてポート設定を表示
+    print(f"Configured to listen on port {port}")
+    
+    # StreamlitをCloud Run互換モードで起動
+    import sys
+    import subprocess
+    cmd = [
+        "streamlit", 
+        "run", 
+        sys.argv[0],
+        "--server.port", str(port),
+        "--server.address", "0.0.0.0"
+    ]
+    subprocess.call(cmd)
