@@ -77,6 +77,10 @@ def imagen_generate(
             negative_prompt=negative_prompt,
             aspect_ratio=aspect_ratio,
             add_watermark=False,
+            # compression_quality="",
+            # output_mime_type="",
+            # output_gcs_uri="",
+            # enhancePrompt=true,
             seed=seed,
             safety_filter_level="block_medium_and_above",
             person_generation="allow_adult"
