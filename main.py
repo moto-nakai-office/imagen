@@ -68,6 +68,7 @@ def imagen_generate(
     try:
         # Vertex AIのImagen 3.0モデルを初期化
         model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
+        model_version = "imagen-3.0-generate-002"  # モデルバージョンを記録
         
         # 画像生成リクエスト
         generate_response = model.generate_images(
@@ -80,6 +81,17 @@ def imagen_generate(
             safety_filter_level="block_medium_and_above",
             person_generation="allow_adult"
         )
+        
+        # 生レスポンスデータの取得（可能な範囲で）
+        raw_response = {}
+        try:
+            # generate_responseオブジェクトから取得できる情報を収集
+            raw_response = {
+                "image_count": len(generate_response),
+                # その他の取得可能なメタデータがあれば追加
+            }
+        except Exception as e:
+            raw_response = {"error": f"生レスポンス取得エラー: {str(e)}"}
         
         image_list = []
         for index, result in enumerate(generate_response):
@@ -95,11 +107,12 @@ def imagen_generate(
             # エンコードされた画像をリストに追加
             image_list.append(img_str)
 
-        return image_list, None
+        # モデルバージョンと生レスポンスを含めて返却
+        return image_list, None, model_version, raw_response
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"エラー詳細: {error_details}", flush=True)
-        return None, str(e)
+        return None, str(e), None, None
 
 @app.route("/generate", methods=["POST"])
 def generate():
@@ -116,13 +129,13 @@ def generate():
         seed = data.get("seed", None)
         aspect_ratio = data.get("aspect_ratio", "3:4")
         
-        # 画像生成
-        images, error = imagen_generate(prompt, negative_prompt, seed, aspect_ratio)
+        # 画像生成（修正版関数を呼び出し）
+        images, error, model_version, raw_response = imagen_generate(prompt, negative_prompt, seed, aspect_ratio)
         
         if error:
             return jsonify({"error": error}), 500
             
-        # 結果を返却
+        # 結果を返却（拡張バージョン）
         return jsonify({
             "status": "success",
             "data": {
@@ -130,7 +143,9 @@ def generate():
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
                 "seed": seed,
-                "aspect_ratio": aspect_ratio
+                "aspect_ratio": aspect_ratio,
+                "model_version": model_version,  # モデルバージョンを追加
+                "raw_response": raw_response     # 生レスポンス情報を追加
             }
         })
         
