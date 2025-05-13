@@ -13,9 +13,11 @@ import random
 app = Flask(__name__)
 
 # Vertex AI初期化
-PROJECT_ID = os.getenv("PROJECT_ID")
-LOCATION = os.getenv("REGION", os.getenv("LOCATION", "us-central1"))
-vertexai.init(project=PROJECT_ID, location=LOCATION)
+ENV_VARS = {
+    "PROJECT_ID": os.getenv("PROJECT_ID"),
+    "LOCATION": os.getenv("REGION", "us-central1")
+}
+vertexai.init(project=ENV_VARS["PROJECT_ID"], location=ENV_VARS["LOCATION"])
 
 def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
     # 画像サイズをチェックしながらJPEGで圧縮、必要に応じて画像を縮小
@@ -31,8 +33,8 @@ def compress_image(pil_image, max_size=1024 * 1024, max_pixels=1_000_000):
         new_height = int(height * scale_factor)
         
         # どのバージョンのPillowでも動作するリサイズ方法
-        pil_image = pil_image.resize((new_width, new_height))
-
+        pil_image = pil_image.resize((new_width, new_height), Image.LANCZOS)
+        
     # 圧縮とリサイズを繰り返し、指定サイズ以下になるまで試行
     while True:
         buffer.seek(0)
