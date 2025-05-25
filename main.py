@@ -9,6 +9,7 @@ import vertexai
 from vertexai.preview.vision_models import ImageGenerationModel
 import random
 
+
 # Flaskアプリケーションの初期化
 app = Flask(__name__)
 
