@@ -78,8 +78,8 @@ def imagen_generate(
             seed = generated_seed  # 生成した乱数をseedとして使用
         
         # Vertex AIのImagen モデルを初期化
-        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate-preview-05-20")
-        model_version = "imagen-3.0-generate-002"
+        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate")
+        model_version = "imagen-4.0-generate"
         
         # 画像生成リクエスト（生成したseedを使用）
         generate_response = model.generate_images(
@@ -180,7 +180,7 @@ def debug():
         
         # ImageGenerationModelの情報
         from vertexai.preview.vision_models import ImageGenerationModel
-        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate-preview-05-20")
+        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate")
         
         # メソッドのシグネチャを調査
         import inspect
@@ -204,7 +204,7 @@ def debug_params():
         vertexai_version = getattr(vertexai, "__version__", "不明")
         
         # ImageGenerationModelの初期化
-        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate-preview-05-20")
+        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate")
         
         # generate_imagesメソッドのシグネチャを取得
         method_signature = inspect.signature(model.generate_images)
@@ -255,7 +255,7 @@ def debug_params():
 def debug_model():
     try:
         # モデルのインスタンス化
-        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate-preview-05-20")
+        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate")
         
         # クラスのメソッド一覧を取得
         methods = {}
@@ -305,7 +305,7 @@ def test_param():
         param_value = data.get("param_value")
         
         # モデルをインスタンス化
-        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate-preview-05-20")
+        model = ImageGenerationModel.from_pretrained("imagen-4.0-generate")
         
         # 基本パラメータ
         params = {
